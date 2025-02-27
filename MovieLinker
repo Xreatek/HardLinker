@@ -1,0 +1,113 @@
+#!/bin/bash
+
+if [ "$EUID" -ne 0 ]
+  then echo "Please run as root"
+  exit
+fi
+
+#case insesitive matching
+shopt -s nocasematch
+
+# Get the list of actual movie filenames safely
+movie_dir="/mnt/media-data/data/media/movies"
+
+download_dir="/mnt/media-data/data/torrents/movies"
+
+mapfile -t actual_movies < <(ls "$movie_dir")
+
+# Function to clean movie names for better matching
+clean_movie_name() {
+    local cleaned_name="$1"
+
+    # Remove all square bracketed sections
+    cleaned_name=$(echo "$cleaned_name" | sed -E 's/\[[^]]+\]//g')
+
+    # Extract the year (last valid four-digit number between 1900-2099)
+    year=$(echo "$cleaned_name" | grep -oE '19[0-9]{2}|20[0-9]{2}' | tail -n1)
+
+    # Remove everything after the year, ensuring proper spacing
+    cleaned_name=$(echo "$cleaned_name" | sed -E "s/[ .]*$year.*//")
+
+    # Replace dots and underscores with spaces
+    cleaned_name=$(echo "$cleaned_name" | tr '._' ' ')
+
+    # Remove extra characters like hyphens and parentheses
+    cleaned_name=$(echo "$cleaned_name" | sed -E 's/[()\-]//g')
+
+    # Trim leading and trailing spaces
+    cleaned_name=$(echo "$cleaned_name" | sed -E 's/^ +| +$//g')
+
+    # Return the cleaned name
+    if [[ -n "$year" ]]; then
+        echo "$cleaned_name ($year)"
+    fi
+}
+
+get_file(){
+        file_path=$(echo "$download_dir/$filename")
+        if [[ -d $file_path ]]; then
+                echo "dir"
+        elif [[ -f $file_path ]]; then
+                echo "file"
+        else
+                echo "$file_path is not valid"
+                exit 1
+        fi
+}
+
+try_to_link() {
+        echo "Movie filename:  '$best_match'"
+        echo "Download filename: '$filename'"
+
+        ftype=$(get_file)
+        if [[ $ftype == "file" ]]; then
+                echo "file"
+                if [[ ! -h "$download_dir/$filename" ]]; then
+
+                        rm -v "$movie_dir/$best_match/$filename"
+
+                        ln -fP "$download_dir/$filename" "$movie_dir/$best_match/$filename"
+
+                fi
+        elif [[ $ftype == "dir" ]]
+        then
+                echo "dir"
+
+                echo "down files:" $(ls "$download_dir/$filename")
+                echo "movie files:" $(ls "$movie_dir/$best_match")
+
+                for item in "$download_dir/$filename"/*; do
+                        item=$(basename "$item")
+                        rm -v "$movie_dir/$best_match/$item"
+
+                        ln -fP "$download_dir/$filename/$item" "$movie_dir/$best_match/$item"
+                done
+        fi
+}
+
+for filename in *; do
+    cleaned_name=$(clean_movie_name "$filename")
+
+    if [[ -n "$cleaned_name" ]]; then
+        best_match=""
+
+        # Find the best match from the actual movie directory
+        for movie in "${actual_movies[@]}"; do
+            cleaned_movie=$(clean_movie_name "$movie")
+
+            if [[ "$cleaned_movie" == *"$cleaned_name"* ]]; then
+                best_match="$movie"
+                break
+            fi
+        done
+
+        if [[ -n "$best_match" ]]; then
+                        echo "cleaned: '$cleaned_name'"
+                        echo "matched: '$best_match'"
+                        try_to_link
+        else
+                echo "No match found for: '$cleaned_name'"
+        fi
+        echo "------"
+    fi
+done
